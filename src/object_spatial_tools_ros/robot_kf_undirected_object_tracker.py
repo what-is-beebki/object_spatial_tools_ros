@@ -46,10 +46,12 @@ class SingleKFUndirectedObjectTracker(object):
         
         F = np.array([[1, 0, dt ,0],
                            [0, 1, 0 ,dt],
-                           [0, 0, self.k_decay, 0],
-                           [0, 0, 0, self.k_decay]])
+                           [0, 0, 0, 0],
+                           [0, 0, 0, 0]])
+                          ## [0, 0, self.k_decay, 0],
+                          ## [0, 0, 0, self.k_decay]])
         
-        self.x = np.matmul(F, self.x)
+        self.x = np.matmul(F, self.x) #self.Z
         
         self.P = np.matmul( np.matmul(F, self.P), F.T) + self.Q
         
@@ -83,6 +85,7 @@ class RobotKFUndirectedObjectTracker(object):
             self.tf_pub_prefix = self.tf_pub_prefix + '/'
         
         tracked_objects_type_names = rospy.get_param('~tracked_objects_type_names', [])
+        #надо заставить отслеживать объект с определённым id
         
         self.objects_to_KFs = {}
         self.KFs_prev_elements = {}
@@ -230,6 +233,7 @@ class RobotKFUndirectedObjectTracker(object):
         
         # collect objects of interests
         detected_objects = {}
+        
         for obj in msg.objects:            
             if obj.type_name in self.objects_to_KFs:                                
                 
