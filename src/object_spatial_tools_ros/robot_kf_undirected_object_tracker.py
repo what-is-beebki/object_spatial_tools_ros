@@ -16,13 +16,14 @@ class SingleKFUndirectedObjectTracker(object):
     '''        
     x_start - start pose state [x, y]
     t_start - time stamp for init
-    Q_list - diagonale of Q matrix [Qx, Qy, Qvx, Qvy]
-    R_diag - diagonale of R matrix [Rx, Ry]    
-    k_decay - coefficien of speed reduction, default = 1    
+    Q_list  - diagonale of Q matrix [Qx, Qy, Qvx, Qvy]
+    R_diag  - diagonale of R matrix [Rx, Ry]    
+    k_decay - coefficient of speed reduction, default = 1 
+    Z       - state of a system
     '''
     def __init__(self, x_start, t_start, Q_diag, R_diag, k_decay = 1):
         
-        self.x = np.array([x_start[0], x_start[1], 0.0, 0.0])
+        self.Z = np.array([x_start[0], x_start[1], 0.0, 0.0]) # instead of self.x
         self.last_t = t_start
         self.last_upd_t = t_start
         self.Q = np.diag(Q_diag)
@@ -51,27 +52,27 @@ class SingleKFUndirectedObjectTracker(object):
                           ## [0, 0, self.k_decay, 0],
                           ## [0, 0, 0, self.k_decay]])
         
-        self.x = np.matmul(F, self.x) #self.Z
+        self.Z = np.matmul(F, self.Z) #self.Z
         
         self.P = np.matmul( np.matmul(F, self.P), F.T) + self.Q
         
             
     '''
-    z - measured x, y values
-    t - time stamp for update, seconds
+    y_measured - measured x, y values
+    t          - time stamp for update, seconds
     '''
-    def update(self, z, t):
+    def update(self, y_measured, t):
         self.last_upd_t = t
                 
-        y = z - np.matmul(self.H, self.x)
+        Y = y_measured - np.matmul(self.H, self.Z)
         
-        S = np.matmul( np.matmul(self.H, self.P), self.H.T) + self.R
+        S = np.matmul( np.matmul(self.H, self.P), self.H.T) + self.R  # intemediary calculations
         
-        K = np.matmul( np.matmul(self.P, self.H.T), np.linalg.inv(S))
+        G = np.matmul( np.matmul(self.P, self.H.T), np.linalg.inv(S)) # instead of K
         
-        self.x = self.x + np.matmul(K, y)
+        self.Z = self.Z + np.matmul(G, Y)
         
-        self.P = np.matmul((self.I - np.matmul(K, self.H)), self.P)
+        self.P = np.matmul((self.I - np.matmul(G, self.H)), self.P)
 
 class RobotKFUndirectedObjectTracker(object):
     
@@ -126,7 +127,7 @@ class RobotKFUndirectedObjectTracker(object):
                 else:
                     remove_index.append(i)
         
-                #rospy.logwarn(f"{name} {i} {kf.x} {kf.P}")
+                #rospy.logwarn(f"{name} {i} {kf.Z} {kf.P}")
             for index in sorted(remove_index, reverse=True):
                 del kfs[index]
                 
@@ -144,8 +145,8 @@ class RobotKFUndirectedObjectTracker(object):
                 t.header.frame_id = self.target_frame
                 t.child_frame_id = self.tf_pub_prefix+name+f'_{i}'
                 
-                t.transform.translation.x = kf.x[0]
-                t.transform.translation.y = kf.x[1]
+                t.transform.translation.x = kf.Z[0]
+                t.transform.translation.y = kf.Z[1]
                 
                 t.transform.rotation.w = 1
                 
@@ -171,15 +172,15 @@ class RobotKFUndirectedObjectTracker(object):
                 marker.type = Marker.ARROW
                 marker.action = Marker.ADD
                 
-                marker.pose.position.x = kf.x[0]
-                marker.pose.position.y = kf.x[1]                                                
+                marker.pose.position.x = kf.Z[0]
+                marker.pose.position.y = kf.Z[1]                                                
                 
-                marker.pose.orientation = quaternion_msg_from_yaw(np.arctan2(kf.x[3], kf.x[2]))
+                marker.pose.orientation = quaternion_msg_from_yaw(np.arctan2(kf.Z[3], kf.Z[2]))
                                 
                 marker.color.r = 1
                 marker.color.a = 1
                 
-                marker.scale.x = np.hypot(kf.x[3], kf.x[2])
+                marker.scale.x = np.hypot(kf.Z[3], kf.Z[2])
                 marker.scale.y = 0.01
                 marker.scale.z = 0.01
                 
@@ -197,8 +198,8 @@ class RobotKFUndirectedObjectTracker(object):
                 marker.type = Marker.CYLINDER
                 marker.action = Marker.ADD
                 
-                marker.pose.position.x = kf.x[0]
-                marker.pose.position.y = kf.x[1]                
+                marker.pose.position.x = kf.Z[0]
+                marker.pose.position.y = kf.Z[1]                
                                 
                 marker.color.r = 1
                 marker.color.b = 1
@@ -257,7 +258,7 @@ class RobotKFUndirectedObjectTracker(object):
                 
                 m_poses_np = np.array(poses) # [[x, y]]
                 
-                kf_poses_np = np.array([[kf.x[0], kf.x[1]] for kf in self.objects_to_KFs[obj_name]])
+                kf_poses_np = np.array([[kf.Z[0], kf.Z[1]] for kf in self.objects_to_KFs[obj_name]])
                 
                 S_np = np.array([np.linalg.inv(kf.P[:2,:2]) for kf in self.objects_to_KFs[obj_name]]) # already inv!
                 
@@ -318,7 +319,7 @@ class RobotKFUndirectedObjectTracker(object):
                 
                 m_poses_np = np.array(poses) # [[x, y]]
                 
-                kf_poses_np = np.array([[kf.x[0], kf.x[1]] for kf in self.objects_to_KFs[obj_name]])
+                kf_poses_np = np.array([[kf.Z[0], kf.Z[1]] for kf in self.objects_to_KFs[obj_name]])
                 
                 S_np = np.array([np.linalg.inv(kf.P[:2,:2]) for kf in self.objects_to_KFs[obj_name]]) # already inv!
                 
