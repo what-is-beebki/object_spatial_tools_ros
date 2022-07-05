@@ -9,7 +9,8 @@ import tf
 import numpy as np
 from visualization_msgs.msg import Marker, MarkerArray
 from threading import Lock
-from geometry_msgs.msg import TransformStamped
+from geometry_msgs.msg import TransformStamped, Point
+from object_spatial_tools_ros.msg import TrackedObject, TrackedObjectArray
 
 class SingleKFUndirectedObjectTracker(object):
     
@@ -38,6 +39,8 @@ class SingleKFUndirectedObjectTracker(object):
         
         self.I = np.eye(4)                            
         
+        self.track = []
+        
     '''
     t - time stamp for predict, seconds
     '''
@@ -56,6 +59,8 @@ class SingleKFUndirectedObjectTracker(object):
         
         self.P = np.matmul( np.matmul(F, self.P), F.T) + self.Q
         
+        self.track.append(self.x.copy())
+        
             
     '''
     y_measured - measured x, y values
@@ -72,7 +77,9 @@ class SingleKFUndirectedObjectTracker(object):
         
         self.Z = self.Z + np.matmul(G, Y)
         
-        self.P = np.matmul((self.I - np.matmul(G, self.H)), self.P)
+        self.P = np.matmul((self.I - np.matmul(K, self.H)), self.P)
+        
+        self.track.append(self.x.copy())
 
 class RobotKFUndirectedObjectTracker(object):
     
@@ -103,13 +110,18 @@ class RobotKFUndirectedObjectTracker(object):
         self.k_decay = rospy.get_param('~k_decay', 1)
         self.lifetime = rospy.get_param('~lifetime', 0)
         self.mahalanobis_max = rospy.get_param('~mahalanobis_max', 1)
+                
+        self.min_score = rospy.get_param('~min_score', 0)
+        self.min_score_soft = rospy.get_param('~min_score_soft', self.min_score)
+        
         
         self.mutex = Lock()
         
         update_rate_hz = rospy.get_param('~update_rate_hz', 5)
         
         self.vis_pub = rospy.Publisher('~vis', MarkerArray, queue_size = 1)
-        #по идее, он должен рисовать мне смешной эллипс, предугадывающий положение маркера в рвизе
+
+        self.out_pub = rospy.Publisher('~tracked_objects', TrackedObjectArray, queue_size = 1)
         
         rospy.Subscriber('simple_objects', SimpleObjectArray, self.sobject_cb)
         rospy.Subscriber('complex_objects', ComplexObjectArray, self.cobject_cb)
@@ -134,15 +146,17 @@ class RobotKFUndirectedObjectTracker(object):
                 
         self.to_marker_array()
         self.to_tf()
+        self.to_tracked_object_array()
         self.mutex.release()
         
     def to_tf(self):
+        now = rospy.Time.now()
         for name, kfs in self.objects_to_KFs.items():
             for i, kf in enumerate(kfs):
                 
                 t = TransformStamped()
                 
-                t.header.stamp = rospy.Time.now()
+                t.header.stamp = now
                 t.header.frame_id = self.target_frame
                 t.child_frame_id = self.tf_pub_prefix+name+f'_{i}'
                 
@@ -152,7 +166,38 @@ class RobotKFUndirectedObjectTracker(object):
                 t.transform.rotation.w = 1
                 
                 self.tf_broadcaster.sendTransform(t)                
+        
+    
+    def to_tracked_object_array(self):        
+        msg_array = TrackedObjectArray()
+        msg_array.header.stamp = rospy.Time.now()
+        msg_array.header.frame_id = self.target_frame
+        for name, kfs in self.objects_to_KFs.items():
+            for i, kf in enumerate(kfs):
+                msg = TrackedObject()
+                msg.child_frame_id = self.tf_pub_prefix+name+f'_{i}'
                 
+                msg.pose.pose.position.x = kf.x[0]
+                msg.pose.pose.position.y = kf.x[1]
+                
+                msg.pose.pose.orientation.w = 1
+                
+                msg.pose.covariance[0] = kf.P[0,0]#xx
+                msg.pose.covariance[1] = kf.P[0,1]#xy
+                msg.pose.covariance[6] = kf.P[1,0]#yx
+                msg.pose.covariance[7] = kf.P[1,1]#yy
+                
+                msg.twist.twist.linear.x = kf.x[2]
+                msg.twist.twist.linear.y = kf.x[3]
+                
+                msg.twist.covariance[0] = kf.P[2,2]#xx
+                msg.twist.covariance[1] = kf.P[2,3]#xy
+                msg.twist.covariance[2] = kf.P[3,2]#yx
+                msg.twist.covariance[3] = kf.P[3,3]#yy
+                
+                msg_array.objects.append(msg)
+                
+        self.out_pub.publish(msg_array)
                 
                 
     def to_marker_array(self):
@@ -214,8 +259,35 @@ class RobotKFUndirectedObjectTracker(object):
                 marker.pose.orientation = quaternion_msg_from_yaw(th)
                 
                 marker_array.markers.append(marker)
+                
+                # TRACK
+                marker = Marker()
+                
+                marker.header.stamp = now
+                marker.header.frame_id = self.target_frame
+                
+                marker.ns = name+"_track"
+                marker.id = i
+                
+                marker.type = Marker.LINE_STRIP
+                marker.action = Marker.ADD
+                
+                marker.scale.x = 0.03
+                marker.color.g = 1
+                marker.color.a = 1
+                marker.pose.orientation.w = 1
+                
+                for track_item in kf.track:
+                    p = Point()
+                    p.x = track_item[0]
+                    p.y = track_item[1]
+                    marker.points.append(p)
+                    
+                marker_array.markers.append(marker)
+                
+                
             for j in range(i+1, self.KFs_prev_elements[name]):
-                for t in ["_el","_pose"]:
+                for t in ["_el","_pose", "_track"]:
                     marker = Marker()                
                     marker.header.stamp = now
                     marker.ns = name+t
@@ -224,6 +296,7 @@ class RobotKFUndirectedObjectTracker(object):
                     marker_array.markers.append(marker)
                 
         self.vis_pub.publish(marker_array)
+            
     
     def sobject_cb(self, msg):
         self.mutex.acquire()
@@ -232,59 +305,8 @@ class RobotKFUndirectedObjectTracker(object):
         if transform is None:
             self.mutex.release()
             return
-        
-        # collect objects of interests
-        detected_objects = {}
-        
-        for obj in msg.objects:            
-            if obj.type_name in self.objects_to_KFs:                                
                 
-                ps = obj_transform_to_pose(obj.transform, msg.header)
-                
-                ps_transformed = tf2_geometry_msgs.do_transform_pose(ps, transform).pose
-                
-                ps_np = np.array([ps_transformed.position.x, ps_transformed.position.y])
-                
-                if obj.type_name in detected_objects:
-                    detected_objects[obj.type_name].append(ps_np)
-                else:
-                    detected_objects[obj.type_name] = [ps_np]                                
-                
-        for obj_name, poses in detected_objects.items():
-            
-            if len(self.objects_to_KFs[obj_name]) == 0:
-                for pose in poses:                
-                    self.objects_to_KFs[obj.type_name].append(SingleKFUndirectedObjectTracker(pose, now, self.Qdiag, self.Rdiag, self.k_decay))
-            else:
-                
-                m_poses_np = np.array(poses) # [[x, y]]
-                
-                kf_poses_np = np.array([[kf.Z[0], kf.Z[1]] for kf in self.objects_to_KFs[obj_name]])
-                
-                S_np = np.array([np.linalg.inv(kf.P[:2,:2]) for kf in self.objects_to_KFs[obj_name]]) # already inv!
-                
-                D = multi_mahalanobis(m_poses_np, kf_poses_np, S_np)
-                
-                #print('D', D, D.shape)
-                
-                extra_poses = list(range(len(poses)))
-                while not rospy.is_shutdown():
-                    
-                    closest = np.unravel_index(np.argmin(D, axis=None), D.shape)
-                    #print(closest, D[closest])
-                                    
-                    if D[closest] > self.mahalanobis_max:
-                        break
-                    
-                    self.objects_to_KFs[obj.type_name][closest[1]].update(poses[closest[0]], now)
-                    
-                    D[closest[0],:] = np.inf
-                    D[:,closest[1]] = np.inf
-                    extra_poses.remove(closest[0])
-                                                        
-                #for i in range(D.shape[0]):
-                for i in extra_poses:                
-                    self.objects_to_KFs[obj.type_name].append(SingleKFUndirectedObjectTracker(poses[i], now, self.Qdiag, self.Rdiag, self.k_decay))
+        self.proceed_objects(msg.header, msg.objects, transform, now)
         self.mutex.release()
         
     def cobject_cb(self, msg):
@@ -295,16 +317,30 @@ class RobotKFUndirectedObjectTracker(object):
             self.mutex.release()
             return
         
-        # collect objects of interests
+        self.proceed_objects(msg.header, msg.complex_objects, transform, now)
+        self.mutex.release()
+        
+        
+    def proceed_objects(self, header, objects, transform, now):
         detected_objects = {}
-        for obj in msg.complex_objects:            
+        for obj in objects:            
             if obj.type_name in self.objects_to_KFs:                                
                 
-                ps = obj_transform_to_pose(obj.transform, msg.header)
+                soft_tracking = False
+                
+                if obj.transform.translation.z == 1:
+                    continue
+                
+                if obj.score < self.min_score:
+                    if obj.score < self.min_score_soft:
+                        continue    
+                    soft_tracking = True
+                
+                ps = obj_transform_to_pose(obj.transform, header)
                 
                 ps_transformed = tf2_geometry_msgs.do_transform_pose(ps, transform).pose
                 
-                ps_np = np.array([ps_transformed.position.x, ps_transformed.position.y])
+                ps_np = np.array([ps_transformed.position.x, ps_transformed.position.y, float(soft_tracking)])
                 
                 if obj.type_name in detected_objects:
                     detected_objects[obj.type_name].append(ps_np)
@@ -315,10 +351,12 @@ class RobotKFUndirectedObjectTracker(object):
             
             if len(self.objects_to_KFs[obj_name]) == 0:
                 for pose in poses:                
-                    self.objects_to_KFs[obj.type_name].append(SingleKFUndirectedObjectTracker(pose, now, self.Qdiag, self.Rdiag, self.k_decay))
+                    if pose[2] == 1:
+                        continue # skip soft_tracking
+                    self.objects_to_KFs[obj_name].append(SingleKFUndirectedObjectTracker(pose[:2], now, self.Qdiag, self.Rdiag, self.k_decay))
             else:
                 
-                m_poses_np = np.array(poses) # [[x, y]]
+                m_poses_np = np.array(poses)[:,:2] # [[x, y]]
                 
                 kf_poses_np = np.array([[kf.Z[0], kf.Z[1]] for kf in self.objects_to_KFs[obj_name]])
                 
@@ -336,17 +374,20 @@ class RobotKFUndirectedObjectTracker(object):
                                     
                     if D[closest] > self.mahalanobis_max:
                         break
-                    
-                    self.objects_to_KFs[obj.type_name][closest[1]].update(poses[closest[0]], now)
+                                        
+                    self.objects_to_KFs[obj_name][closest[1]].update(poses[closest[0]][:2], now)
                     
                     D[closest[0],:] = np.inf
                     D[:,closest[1]] = np.inf
                     extra_poses.remove(closest[0])
                                                         
                 #for i in range(D.shape[0]):
-                for i in extra_poses:                
-                    self.objects_to_KFs[obj.type_name].append(SingleKFUndirectedObjectTracker(poses[i], now, self.Qdiag, self.Rdiag, self.k_decay))
-        self.mutex.release()
+                for i in extra_poses:      
+                    if poses[i][2] == 1: # soft_tracking
+                        continue
+                    self.objects_to_KFs[obj_name].append(SingleKFUndirectedObjectTracker(poses[i], now, self.Qdiag, self.Rdiag, self.k_decay))        
+        
+        
                         
         
     def run(self):
