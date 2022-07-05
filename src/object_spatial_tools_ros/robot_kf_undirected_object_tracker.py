@@ -109,6 +109,7 @@ class RobotKFUndirectedObjectTracker(object):
         update_rate_hz = rospy.get_param('~update_rate_hz', 5)
         
         self.vis_pub = rospy.Publisher('~vis', MarkerArray, queue_size = 1)
+        #по идее, он должен рисовать мне смешной эллипс, предугадывающий положение маркера в рвизе
         
         rospy.Subscriber('simple_objects', SimpleObjectArray, self.sobject_cb)
         rospy.Subscriber('complex_objects', ComplexObjectArray, self.cobject_cb)
