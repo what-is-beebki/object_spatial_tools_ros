@@ -22,7 +22,7 @@ class SingleKFUndirectedObjectTracker(object):
     k_decay - coefficient of speed reduction, default = 1 
     Z       - state of a system
     '''
-    def __init__(self, x_start, t_start, Q_diag, R_diag, k_decay = 1, orient = Quaternion()):
+    def __init__(self, x_start, t_start, Q_diag, R_diag, k_decay = 1, orient = [0, 0, 0, 1]):
         
         self.Z = np.array([x_start[0], x_start[1], 0.0, 0.0]) # instead of self.x
         self.last_t = t_start
@@ -30,7 +30,7 @@ class SingleKFUndirectedObjectTracker(object):
         self.Q = np.diag(Q_diag)
         self.R = np.diag(R_diag)
         self.k_decay = k_decay
-        self.rotation = orient
+        self.rotation = Quaternion(orient[0], orient[1], orient[2], orient[3])
         
         
         self.H = np.array([[1, 0, 0, 0],
@@ -124,8 +124,6 @@ class RobotKFUndirectedObjectTracker(object):
 
         self.out_pub = rospy.Publisher('~tracked_objects', TrackedObjectArray, queue_size = 1)
         
-        self.posepub = rospy.Publisher('/wtf', Pose, queue_size = 1)
-        
         rospy.Subscriber('simple_objects', SimpleObjectArray, self.sobject_cb)
         rospy.Subscriber('complex_objects', ComplexObjectArray, self.cobject_cb)
         
@@ -166,9 +164,7 @@ class RobotKFUndirectedObjectTracker(object):
                 t.transform.translation.x = kf.Z[0]
                 t.transform.translation.y = kf.Z[1]
                 
-                #kf.orient = Quaternion(0, 0, 0.38268343236, 0.92387953251)
-                #t.transform.rotation = kf.orient
-                t.transform.rotation.w = 1
+                t.transform.rotation = kf.rotation
                 
                 self.tf_broadcaster.sendTransform(t)                
         
@@ -343,12 +339,9 @@ class RobotKFUndirectedObjectTracker(object):
                 
                 ps = obj_transform_to_pose(obj.transform, header)
                 
-                #здесь я посмотрю, не успела ли утратиться информация
-                self.posepub.publish(ps.pose)
-                
                 ps_transformed = tf2_geometry_msgs.do_transform_pose(ps, transform).pose
                 
-                ps_np = np.array([ps_transformed.position.x, ps_transformed.position.y, float(soft_tracking)])
+                ps_np = np.array([ps_transformed.position.x, ps_transformed.position.y, float(soft_tracking), ps_transformed.orientation.x, ps_transformed.orientation.y, ps_transformed.orientation.z, ps_transformed.orientation.w])
                 
                 if obj.type_name in detected_objects:
                     detected_objects[obj.type_name].append(ps_np)
@@ -361,7 +354,7 @@ class RobotKFUndirectedObjectTracker(object):
                 for pose in poses:                
                     if pose[2] == 1:
                         continue # skip soft_tracking
-                    self.objects_to_KFs[obj_name].append(SingleKFUndirectedObjectTracker(pose[:2], now, self.Qdiag, self.Rdiag, self.k_decay))
+                    self.objects_to_KFs[obj_name].append(SingleKFUndirectedObjectTracker(pose[:2], now, self.Qdiag, self.Rdiag, self.k_decay, pose[3:]))
             else:
                 
                 m_poses_np = np.array(poses)[:,:2] # [[x, y]]
@@ -393,7 +386,7 @@ class RobotKFUndirectedObjectTracker(object):
                 for i in extra_poses:      
                     if poses[i][2] == 1: # soft_tracking
                         continue
-                    self.objects_to_KFs[obj_name].append(SingleKFUndirectedObjectTracker(poses[i], now, self.Qdiag, self.Rdiag, self.k_decay))        
+                    self.objects_to_KFs[obj_name].append(SingleKFUndirectedObjectTracker(poses[i][:2], now, self.Qdiag, self.Rdiag, self.k_decay, poses[3:]))        
         
         
                         
