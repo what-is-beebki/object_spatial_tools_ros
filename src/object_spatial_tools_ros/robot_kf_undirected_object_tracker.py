@@ -59,7 +59,7 @@ class SingleKFUndirectedObjectTracker(object):
         
         self.P = np.matmul( np.matmul(F, self.P), F.T) + self.Q
         
-        self.track.append(self.x.copy())
+        self.track.append(self.Z.copy())
         
             
     '''
@@ -77,9 +77,9 @@ class SingleKFUndirectedObjectTracker(object):
         
         self.Z = self.Z + np.matmul(G, Y)
         
-        self.P = np.matmul((self.I - np.matmul(K, self.H)), self.P)
+        self.P = np.matmul((self.I - np.matmul(G, self.H)), self.P)
         
-        self.track.append(self.x.copy())
+        self.track.append(self.Z.copy())
 
 class RobotKFUndirectedObjectTracker(object):
     
@@ -177,8 +177,8 @@ class RobotKFUndirectedObjectTracker(object):
                 msg = TrackedObject()
                 msg.child_frame_id = self.tf_pub_prefix+name+f'_{i}'
                 
-                msg.pose.pose.position.x = kf.x[0]
-                msg.pose.pose.position.y = kf.x[1]
+                msg.pose.pose.position.x = kf.Z[0]
+                msg.pose.pose.position.y = kf.Z[1]
                 
                 msg.pose.pose.orientation.w = 1
                 
@@ -187,8 +187,8 @@ class RobotKFUndirectedObjectTracker(object):
                 msg.pose.covariance[6] = kf.P[1,0]#yx
                 msg.pose.covariance[7] = kf.P[1,1]#yy
                 
-                msg.twist.twist.linear.x = kf.x[2]
-                msg.twist.twist.linear.y = kf.x[3]
+                msg.twist.twist.linear.x = kf.Z[2]
+                msg.twist.twist.linear.y = kf.Z[3]
                 
                 msg.twist.covariance[0] = kf.P[2,2]#xx
                 msg.twist.covariance[1] = kf.P[2,3]#xy
