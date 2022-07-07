@@ -9,7 +9,7 @@ import tf
 import numpy as np
 from visualization_msgs.msg import Marker, MarkerArray
 from threading import Lock
-from geometry_msgs.msg import TransformStamped, Point
+from geometry_msgs.msg import TransformStamped, Point, Quaternion, Pose
 from object_spatial_tools_ros.msg import TrackedObject, TrackedObjectArray
 
 class SingleKFUndirectedObjectTracker(object):
@@ -22,7 +22,7 @@ class SingleKFUndirectedObjectTracker(object):
     k_decay - coefficient of speed reduction, default = 1 
     Z       - state of a system
     '''
-    def __init__(self, x_start, t_start, Q_diag, R_diag, k_decay = 1):
+    def __init__(self, x_start, t_start, Q_diag, R_diag, k_decay = 1, orient = Quaternion()):
         
         self.Z = np.array([x_start[0], x_start[1], 0.0, 0.0]) # instead of self.x
         self.last_t = t_start
@@ -30,6 +30,7 @@ class SingleKFUndirectedObjectTracker(object):
         self.Q = np.diag(Q_diag)
         self.R = np.diag(R_diag)
         self.k_decay = k_decay
+        self.rotation = orient
         
         
         self.H = np.array([[1, 0, 0, 0],
@@ -123,6 +124,8 @@ class RobotKFUndirectedObjectTracker(object):
 
         self.out_pub = rospy.Publisher('~tracked_objects', TrackedObjectArray, queue_size = 1)
         
+        self.posepub = rospy.Publisher('/wtf', Pose, queue_size = 1)
+        
         rospy.Subscriber('simple_objects', SimpleObjectArray, self.sobject_cb)
         rospy.Subscriber('complex_objects', ComplexObjectArray, self.cobject_cb)
         
@@ -163,6 +166,8 @@ class RobotKFUndirectedObjectTracker(object):
                 t.transform.translation.x = kf.Z[0]
                 t.transform.translation.y = kf.Z[1]
                 
+                #kf.orient = Quaternion(0, 0, 0.38268343236, 0.92387953251)
+                #t.transform.rotation = kf.orient
                 t.transform.rotation.w = 1
                 
                 self.tf_broadcaster.sendTransform(t)                
@@ -337,6 +342,9 @@ class RobotKFUndirectedObjectTracker(object):
                     soft_tracking = True
                 
                 ps = obj_transform_to_pose(obj.transform, header)
+                
+                #здесь я посмотрю, не успела ли утратиться информация
+                self.posepub.publish(ps.pose)
                 
                 ps_transformed = tf2_geometry_msgs.do_transform_pose(ps, transform).pose
                 
