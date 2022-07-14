@@ -9,7 +9,7 @@ import tf
 import numpy as np
 from visualization_msgs.msg import Marker, MarkerArray
 from threading import Lock
-from geometry_msgs.msg import TransformStamped, Point, Quaternion, Pose
+from geometry_msgs.msg import PoseStamped, TransformStamped, Point, Quaternion, Pose
 from object_spatial_tools_ros.msg import TrackedObject, TrackedObjectArray
 
 class SingleKFUndirectedObjectTracker(object):
@@ -51,10 +51,10 @@ class SingleKFUndirectedObjectTracker(object):
         
         F = np.array([[1, 0, dt ,0],
                            [0, 1, 0 ,dt],
-                           [0, 0, 0, 0],
-                           [0, 0, 0, 0]])
-                          ## [0, 0, self.k_decay, 0],
-                          ## [0, 0, 0, self.k_decay]])
+                          ## [0, 0, 0, 0],
+                          ## [0, 0, 0, 0]])
+                           [0, 0, self.k_decay, 0],
+                           [0, 0, 0, self.k_decay]])
         
         self.Z = np.matmul(F, self.Z) #self.Z
         
@@ -67,7 +67,7 @@ class SingleKFUndirectedObjectTracker(object):
     y_measured - measured x, y values
     t          - time stamp for update, seconds
     '''
-    def update(self, y_measured, t):
+    def update(self, y_measured, t, orient):
         self.last_upd_t = t
                 
         Y = y_measured - np.matmul(self.H, self.Z)
@@ -79,6 +79,8 @@ class SingleKFUndirectedObjectTracker(object):
         self.Z = self.Z + np.matmul(G, Y)
         
         self.P = np.matmul((self.I - np.matmul(G, self.H)), self.P)
+        
+        self.rotation = Quaternion(orient[0], orient[1], orient[2], orient[3])
         
         self.track.append(self.Z.copy())
 
@@ -107,7 +109,7 @@ class RobotKFUndirectedObjectTracker(object):
         self.tf_broadcaster = tf2_ros.TransformBroadcaster()
         
         self.Qdiag = rospy.get_param('~Qdiag', [0.1, 0.1, 0.1, 0.1])
-        self.Rdiag = rospy.get_param('~Rdiag', [0.1, 0.1])
+        self.Rdiag = rospy.get_param('~Rdiag', [0.7, 0.7])
         self.k_decay = rospy.get_param('~k_decay', 1)
         self.lifetime = rospy.get_param('~lifetime', 0)
         self.mahalanobis_max = rospy.get_param('~mahalanobis_max', 1)
@@ -126,6 +128,9 @@ class RobotKFUndirectedObjectTracker(object):
         
         rospy.Subscriber('simple_objects', SimpleObjectArray, self.sobject_cb)
         rospy.Subscriber('complex_objects', ComplexObjectArray, self.cobject_cb)
+        
+        self.temp_pub_1 = rospy.Publisher('temp_pub_1', PoseStamped, queue_size = 1)
+        self.temp_pub_2 = rospy.Publisher('temp_pub_2', Pose, queue_size = 1)
         
         rospy.Timer(rospy.Duration(1/update_rate_hz), self.process)
         
@@ -338,10 +343,16 @@ class RobotKFUndirectedObjectTracker(object):
                     soft_tracking = True
                 
                 ps = obj_transform_to_pose(obj.transform, header)
+                #self.temp_pub_1.publish(ps)
+                #положение в поле зрения камеры
                 
                 ps_transformed = tf2_geometry_msgs.do_transform_pose(ps, transform).pose
+                #self.temp_pub_2.publish(ps_transformed)
+                #положение в системе координат, связанной с target_frame (odom по умолчанию)
+                #здесь ориентация, полученная системой распознавания, ещё не утрачена
                 
                 ps_np = np.array([ps_transformed.position.x, ps_transformed.position.y, float(soft_tracking), ps_transformed.orientation.x, ps_transformed.orientation.y, ps_transformed.orientation.z, ps_transformed.orientation.w])
+                #добавлены последние 4 элемента, отвечающие за ориентацию
                 
                 if obj.type_name in detected_objects:
                     detected_objects[obj.type_name].append(ps_np)
@@ -355,6 +366,7 @@ class RobotKFUndirectedObjectTracker(object):
                     if pose[2] == 1:
                         continue # skip soft_tracking
                     self.objects_to_KFs[obj_name].append(SingleKFUndirectedObjectTracker(pose[:2], now, self.Qdiag, self.Rdiag, self.k_decay, pose[3:]))
+                    #в конструктор добавлена ориентация
             else:
                 
                 m_poses_np = np.array(poses)[:,:2] # [[x, y]]
@@ -376,7 +388,7 @@ class RobotKFUndirectedObjectTracker(object):
                     if D[closest] > self.mahalanobis_max:
                         break
                                         
-                    self.objects_to_KFs[obj_name][closest[1]].update(poses[closest[0]][:2], now)
+                    self.objects_to_KFs[obj_name][closest[1]].update(poses[closest[0]][:2], now, poses[closest[0]][3:])
                     
                     D[closest[0],:] = np.inf
                     D[:,closest[1]] = np.inf
